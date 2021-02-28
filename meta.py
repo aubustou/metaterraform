@@ -1,4 +1,6 @@
 import logging
+import re
+from dataclasses import MISSING, field, make_dataclass
 from pprint import pprint
 from typing import Any, Dict
 
@@ -9,9 +11,6 @@ url = "outscale-dev/terraform-provider-outscale"
 # url = "terraform-providers/terraform-provider-azurerm"
 
 logging.basicConfig(level=logging.INFO)
-
-import re
-from dataclasses import MISSING, field, make_dataclass
 
 configuration_block_pattern_aws = re.compile(
     r"^### (?P<name>[a-z_]*) Configuration Block"

@@ -47,24 +47,6 @@ def get_datasources(self):
             (Github().get_repo(self.repository).get_contents("website/docs/d")),
         )
     return self.available_datasources
-    is_listing_arguments = False
-    arguments = {}
-    for content in contents if isinstance(contents, list) else [contents]:
-        for line in content.decoded_content.decode():
-            if not is_listing_arguments and line in {
-                "## Arguments Reference",
-                "## Argument Reference",
-            }:
-                is_listing_arguments = True
-
-            if is_listing_arguments:
-                match = argument_pattern.match(line)
-                if match:
-                    argument = match.groupdict()
-                    logging.debug(argument["name"])
-                    logging.debug(argument.get("quality"))
-                    arguments[argument["name"]] = argument
-            time.sleep(0.1)
 
 
 @dataclass
@@ -150,7 +132,7 @@ def get_provider(repository: str):
         .decoded_content.decode()
     )
 
-    arguments: Dict[str, Any] = {
+    arguments: Dict[str, Argument] = {
         "repository": {
             "name": "repository",
             "_default_field": {"init": False, "default": repository},

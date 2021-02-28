@@ -1,16 +1,19 @@
 import logging
 import re
-from dataclasses import MISSING, field, make_dataclass
+import time
+from dataclasses import MISSING, dataclass, field, fields, make_dataclass
 from pprint import pprint
-from typing import Any, Dict
+from typing import Any, Callable, Dict, Optional, Sequence, Union
 
 from github import Github
+from github.ContentFile import ContentFile
+from typing_extensions import TypedDict
 
-url = "outscale-dev/terraform-provider-outscale"
+osc_url = "outscale-dev/terraform-provider-outscale"
 # url = "hashicorp/terraform-provider-aws"
 # url = "terraform-providers/terraform-provider-azurerm"
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 
 configuration_block_pattern_aws = re.compile(
     r"^### (?P<name>[a-z_]*) Configuration Block"
@@ -23,33 +26,136 @@ argument_pattern = re.compile(
 )
 
 
-def recurse_create_dataclass(name: str, input: Dict[str, Dict[str, Any]]):
+class ProviderNamespace(Dict[str, Any]):
+    def __call__(self, as_property: bool = False) -> Callable:
+        def decorator(callback: Callable) -> Callable:
+            self[callback.__name__] = property(callback) if as_property else callback
+            return callback
+
+        return decorator
+
+
+provider_namespace = ProviderNamespace()
+
+
+@provider_namespace()
+def get_datasources(self):
+    if not hasattr(self, "available_datasources"):
+        setattr(
+            self,
+            "available_datasources",
+            (Github().get_repo(self.repository).get_contents("website/docs/d")),
+        )
+    return self.available_datasources
+    is_listing_arguments = False
+    arguments = {}
+    for content in contents if isinstance(contents, list) else [contents]:
+        for line in content.decoded_content.decode():
+            if not is_listing_arguments and line in {
+                "## Arguments Reference",
+                "## Argument Reference",
+            }:
+                is_listing_arguments = True
+
+            if is_listing_arguments:
+                match = argument_pattern.match(line)
+                if match:
+                    argument = match.groupdict()
+                    logging.debug(argument["name"])
+                    logging.debug(argument.get("quality"))
+                    arguments[argument["name"]] = argument
+            time.sleep(0.1)
+
+
+@dataclass
+class Datasource:
+    repository: str = field(default="",)
+    _data: Dict[str, Any] = field(default_factory=dict, repr=False)
+
+    def __getattr__(self, name: str):
+        return recurse_create_dataclass(name.title(), self.get_data(name))
+
+    def get_data(self, name: str):
+        if not self._data.get(name):
+            content = (
+                Github()
+                .get_repo(self.repository)
+                .get_contents("website/docs/d/" + name + ".html.markdown")
+            ).decoded_content.decode()
+            self._data[name] = {}
+            is_listing_arguments = True
+            for line in content.split("\n"):
+                logging.debug(line)
+                if not is_listing_arguments and line in {
+                    "## Arguments Reference",
+                    "## Argument Reference",
+                }:
+                    is_listing_arguments = True
+
+                if is_listing_arguments:
+                    logging.debug(line)
+                    match = argument_pattern.match(line)
+                    if match:
+                        argument = match.groupdict()
+                        logging.debug(argument["name"])
+                        logging.debug(argument.get("quality"))
+                        self._data[name]["name"] = argument
+        return self._data[name]
+
+
+@provider_namespace(as_property=True)
+def datasources(self) -> Datasource:
+    if not hasattr(self, "_datasources"):
+        setattr(self, "_datasources", Datasource(self.repository))
+    return self._datasources
+
+
+class Argument(TypedDict, total=False):
+    name: str
+    quality: str
+    _configuration_block: str
+    _default_field: Dict[str, Union[str, bool]]
+
+
+def recurse_create_dataclass(
+    name: str,
+    input: Dict[str, Union[Dict[str, Argument], Argument]],
+    namespace: Optional[Dict[str, Callable]] = None,
+):
     logging.info(f"Building dataclass for {name}")
     fields_ = []
     for key, value in input.items():
         if not isinstance(value, dict):
             continue
         optional = value.get("quality") == "(Optional)"
+        default_field = value.get("_default_field", {})
         if value.get("_configuration_block"):
             class_name = "".join(x.capitalize() or "_" for x in key.split("_"))
             klass = recurse_create_dataclass(class_name, value)
-            fields_.append(
-                (key, klass, field(default_factory=klass if optional else MISSING))
-            )
+            field_ = {"default_factory": klass if optional else MISSING}
+            field_.update(**default_field)
+            fields_.append((key, klass, field(**field_)))
         else:
-            fields_.append((key, str, field(default="" if optional else MISSING)))
-    return make_dataclass(name, fields_)
+            field_ = {"default": "" if optional else MISSING}
+            field_.update(**default_field)
+            fields_.append((key, str, field(**field_)))
+    return make_dataclass(name, fields_, namespace=namespace)
 
 
-def get_provider(provider: str):
+def get_provider(repository: str):
     content = (
         Github()
-        .get_repo(provider)
+        .get_repo(repository)
         .get_contents("website/docs/index.html.markdown")
         .decoded_content.decode()
     )
 
-    arguments = {}
+    arguments: Dict[str, Any] = {
+        "repository": {
+            "name": "repository",
+            "_default_field": {"init": False, "default": repository},
+        }
+    }
     is_listing_arguments = False
     is_listing_conf_blocks = False
     block_name = ""
@@ -91,8 +197,11 @@ def get_provider(provider: str):
 
     pprint(arguments)
 
-    return recurse_create_dataclass("Provider", arguments)
+    return recurse_create_dataclass("Provider", arguments, namespace=provider_namespace)
 
 
-Provider = get_provider(url)
-# pprint(fields(Provider))
+OSCProvider = get_provider(osc_url)
+pprint(fields(OSCProvider))
+
+provider = OSCProvider()
+pprint(provider.datasources.get_data("access_key"))

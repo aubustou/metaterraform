@@ -22,8 +22,15 @@ configuration_block_pattern_azure = re.compile(
     r"`(?P<name>[a-z_]*)` block supports the following:"
 )
 argument_pattern = re.compile(
-    r"^\* `(?P<name>.*)` \- ?(?P<quality>\(Optional\)|\(Required\)) "
+    r"^\* `(?P<name>.*)` \- ?(?P<quality>\(Optional\)|\(Required\))? "
 )
+
+
+class Argument(TypedDict, total=False):
+    name: str
+    quality: str
+    _configuration_block: str
+    _default_field: Dict[str, Union[str, bool]]
 
 
 class ProviderNamespace(Dict[str, Any]):
@@ -57,7 +64,7 @@ class Datasource:
     def __getattr__(self, name: str):
         return recurse_create_dataclass(name.title(), self.get_data(name))
 
-    def get_data(self, name: str):
+    def get_data(self, name: str) -> Dict[str, Argument]:
         if not self._data.get(name):
             content = (
                 Github()
@@ -81,7 +88,9 @@ class Datasource:
                         argument = match.groupdict()
                         logging.debug(argument["name"])
                         logging.debug(argument.get("quality"))
-                        self._data[name]["name"] = argument
+                        self._data[name] = argument
+                if is_listing_arguments and line in {"## Attribute Reference"}:
+                    is_listing_arguments = False
         return self._data[name]
 
 
@@ -90,13 +99,6 @@ def datasources(self) -> Datasource:
     if not hasattr(self, "_datasources"):
         setattr(self, "_datasources", Datasource(self.repository))
     return self._datasources
-
-
-class Argument(TypedDict, total=False):
-    name: str
-    quality: str
-    _configuration_block: str
-    _default_field: Dict[str, Union[str, bool]]
 
 
 def recurse_create_dataclass(
